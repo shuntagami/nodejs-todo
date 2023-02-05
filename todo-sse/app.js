@@ -18,6 +18,38 @@ app.get("/api/todos", (req, res) => {
   res.json(todos.filter((todo) => todo.completed === completed));
 });
 
+// 全クライアントに対するSSE送信関数を保持する配列
+let sseSenders = [];
+// SSEのIDを管理するための変数
+let sseId = 1;
+
+// ToDo一覧の取得（SSE）
+app.get("/api/todos/events", (req, res) => {
+  // タイムアウトを抑止
+  req.socket.setTimeout(0);
+  res.set({
+    // SSEであることを示すMIMEタイプ
+    "Content-Type": "text/event-stream",
+  });
+  // クライアントにSSEを送信する関数を作成して登録
+  const send = (id, data) => res.write(`id: ${id}\ndata: ${data}\n\n`);
+  sseSenders.push(send);
+  // リクエスト発生時点の状態を送信
+  send(sseId, JSON.stringify(todos));
+  // リクエストがクローズされたらレスポンスを終了してSSE送信関数を配列から削除
+  req.on("close", () => {
+    res.end();
+    sseSenders = sseSenders.filter((_send) => _send !== send);
+  });
+});
+
+/** ToDoの更新に伴い、全クライアントに対してSSEを送信する */
+function onUpdateTodos() {
+  sseId += 1;
+  const data = JSON.stringify(todos);
+  sseSenders.forEach((send) => send(sseId, data));
+}
+
 // IDの値を管理するための変数
 let id = 2;
 
@@ -33,6 +65,7 @@ app.post("/api/todos", (req, res, next) => {
   const todo = { id: (id += 1), title, completed: false };
   todos.push(todo);
   res.status(201).json(todo);
+  onUpdateTodos();
 });
 
 // 指定されたIDのToDoを取得するためのミドルウェア
@@ -54,16 +87,19 @@ app
   .put((req, res) => {
     req.todo.completed = true;
     res.json(req.todo);
+    onUpdateTodos();
   })
   .delete((req, res) => {
     req.todo.completed = false;
     res.json(req.todo);
+    onUpdateTodos();
   });
 
 // ToDoの削除
 app.delete("/api/todos/:id(\\d+)", (req, res) => {
   todos = todos.filter((todo) => todo !== req.todo);
   res.status(204).end();
+  onUpdateTodos();
 });
 
 // エラーハンドリングミドルウェア
